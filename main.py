@@ -8,13 +8,18 @@ from datetime import datetime
 from flask import Flask
 from threading import Thread
 
-# --- КЛЮЧИ И ID ---
+# --- КОНФИГУРАЦИЯ ---
+# Переменные окружения должны быть установлены на Render:
+# BOT_TOKEN, MY_TELEGRAM_ID, FOOTBALL_API_KEY
+# --------------------
+
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID")
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY") 
 
 if not TOKEN or not MY_ID or not FOOTBALL_API_KEY:
-    print("Ошибка: Установите BOT_TOKEN, MY_TELEGRAM_ID и FOOTBALL_API_KEY!")
+    # Если ключи не найдены, печатаем ошибку и выходим
+    print("Ошибка: Установите BOT_TOKEN, MY_TELEGRAM_ID и FOOTBALL_API_KEY в переменных окружения Render!")
     exit()
 
 try:
@@ -22,7 +27,6 @@ try:
 except ValueError:
     print("Ошибка: MY_TELEGRAM_ID должен быть числом!")
     exit()
-# ----------------------------------------
 
 # 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
@@ -34,7 +38,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running and awake! FINAL FOOTBALL MODE."
+    return "Bot is running and awake! Football service operational."
 
 def run_flask_server():
   app.run(host='0.0.0.0', port=RENDER_PORT)
@@ -45,9 +49,9 @@ def keep_alive():
 # ---------------------------------------------
 
 
-# 2. ФУНКЦИИ ДЛЯ РАБОТЫ С НОВЫМ API-FOOTBALL
+# 2. ФУНКЦИИ ДЛЯ РАБОТЫ С API-FOOTBALL
 async def get_raw():
-    """Отправляет запрос на внешний API и возвращает массив матчей."""
+    """Отправляет запрос на API-FOOTBALL и возвращает массив матчей."""
     
     # Заголовки API-FOOTBALL
     headers = {
@@ -64,9 +68,13 @@ async def get_raw():
             async with s.get(API_URL, timeout=15) as r:
                 if r.status == 200:
                     data = await r.json()
-                    # ИСПРАВЛЕНИЕ: Извлекаем массив матчей из ключа "response"
-                    if 'response' in data:
+                    # ИСПРАВЛЕНИЕ ЗАЩИТЫ: Проверяем наличие 'response' и его содержимое
+                    if 'response' in data and isinstance(data['response'], list):
                         return data['response']
+                    
+                    # Если 'response' нет или оно не является списком, логируем ошибку API
+                    print(f"API Error (No response list): {data.get('errors', 'Unknown API Error')}")
+                    return []
                 else:
                     print(f"Ошибка HTTP: {r.status}")
         except Exception as e:
@@ -79,38 +87,44 @@ async def get_matches_for_display():
     raw_matches = await get_raw() # Получаем только массив матчей
     
     if not raw_matches:
-        return "😔 Сегодняшних матчей не найдено или API не вернул данные."
+        # Это сообщение будет отправлено, если API вернул 0 матчей или была ошибка в API
+        return "😔 Сегодняшних матчей не найдено или превышен лимит API."
 
     match_list = []
-    # Теперь raw_matches - это чистый массив, где каждый элемент - это один матч
-    for match in raw_matches[:15]: 
-        
-        home = match['teams']['home']['name']
-        away = match['teams']['away']['name']
-        
-        status = match['fixture']['status']['short']
-        
-        # Защита от None, если счет еще не начался
-        score_home = match['goals']['home'] if match['goals']['home'] is not None else '0'
-        score_away = match['goals']['away'] if match['goals']['away'] is not None else '0'
-        
-        # Форматирование статуса
-        if status == 'NS': # Not Started
-            time = datetime.fromtimestamp(match['fixture']['timestamp']).strftime('%H:%M')
-            status_display = f"⏰ {time}"
-        elif status in ('1H', 'HT', '2H', 'ET', 'P', 'BT'): # Live statuses
-            status_display = f"🟢 LIVE"
-        elif status == 'FT': # Finished
-            status_display = f"✅ FIN"
-        else:
-            status_display = f"[{status}]"
+    
+    for match in raw_matches[:15]: # Ограничиваемся первыми 15 матчами
+        try:
+            # Парсинг данных (теперь он безопасен, так как мы знаем структуру)
+            home = match['teams']['home']['name']
+            away = match['teams']['away']['name']
+            status = match['fixture']['status']['short']
             
-        league_name = match['league']['name']
-        
-        match_list.append(f"({league_name}) {status_display} | <b>{home}</b> {score_home}-{score_away} <b>{away}</b>")
+            # Защита от None, если счет еще не начался
+            score_home = match['goals']['home'] if match['goals']['home'] is not None else '0'
+            score_away = match['goals']['away'] if match['goals']['away'] is not None else '0'
+            
+            # Форматирование статуса
+            if status == 'NS': # Not Started
+                time = datetime.fromtimestamp(match['fixture']['timestamp']).strftime('%H:%M')
+                status_display = f"⏰ {time}"
+            elif status in ('1H', 'HT', '2H', 'ET', 'P', 'BT'): # Live statuses
+                status_display = f"🟢 LIVE"
+            elif status == 'FT': # Finished
+                status_display = f"✅ FIN"
+            else:
+                status_display = f"[{status}]"
+                
+            league_name = match['league']['name']
+            
+            match_list.append(f"({league_name}) {status_display} | <b>{home}</b> {score_home}-{score_away} <b>{away}</b>")
+
+        except KeyError as e:
+            # Логируем ошибку, но продолжаем, чтобы не падать из-за одного матча с плохими данными
+            print(f"Ошибка парсинга одного матча: Missing key {e}")
+            continue
 
     if not match_list:
-        return "😔 Сегодняшних топ-матчей, которые можно отобразить, не найдено."
+        return "😔 Не удалось получить матчи, хотя API ответил (проблема парсинга)."
         
     return "<b>⚽️ ФУТБОЛ СЕГОДНЯ:</b>\n\n" + "\n".join(match_list)
 
