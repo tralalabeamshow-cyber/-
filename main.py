@@ -2,13 +2,12 @@ import asyncio
 import aiohttp
 import os
 from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties # <-- Важный импорт для новой версии
-from datetime import datetime
+from aiogram.client.default import DefaultBotProperties
+from datetime import datetime, timedelta # <-- ИСПРАВЛЕНИЕ: ДОБАВЛЕН timedelta
 from flask import Flask
 from threading import Thread
 
 # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ТОКЕНА И ID ---
-# Переменные берутся из настроек Render (Environment Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
 
@@ -65,11 +64,9 @@ async def handle_tennis_today(message: types.Message):
     """
     await message.answer("🎾 Ищу челленджеры и ITF на сегодня... Подождите 5-10 секунд.")
     
-    # 2. Получаем сырые данные
-    raw = await get_raw("tr_1")
+    raw = await get_raw("tr_1") # tr_1 - сегодняшний теннис
     matches = []
     
-    # 3. Парсим данные
     for line in raw.split("~"):
         if "AA" in line and ("challenger" in line.lower() or "itf" in line.lower()):
             parts = line.split("¬")
@@ -78,7 +75,6 @@ async def handle_tennis_today(message: types.Message):
             tour = next((p[6:] for p in parts if p.startswith("AF")), "")
             matches.append(f"• {p1} – {p2}\n   {tour}")
 
-    # 4. Отправляем результат
     now = datetime.now()
     if matches:
         text = f"<b>🎾 ТЕННИС НА СЕГОДНЯ ({now.strftime('%d.%m')})</b>\nНа что смотреть:\n\n" + "\n\n".join(matches[:15])
@@ -87,10 +83,81 @@ async def handle_tennis_today(message: types.Message):
         await message.answer("😔 На сегодня челленджеров/ITF в расписании не найдено.")
 
 
+@dp.message(lambda message: message.text == '/upcoming')
+async def handle_upcoming_matches(message: types.Message):
+    """
+    Ищет топ-матчи на 6 дней вперед.
+    """
+    await message.answer("🗓️ Ищу матчи на ближайшие 6 дней по футболу (топ-лиги) и теннису (челленджеры/ITF)... Это займет около 30 секунд.")
+    
+    all_future_matches = []
+    major_leagues = ["Premier", "La Liga", "Bundesliga", "Serie A", "Ligue 1", "Champions", "Europa"]
+    
+    # Итерация с 1 по 6 день (завтра и далее)
+    for day_offset in range(1, 7):
+        date_obj = datetime.now() + timedelta(days=day_offset)
+        date_str = date_obj.strftime('%d.%m')
+        
+        # ----------------------------------------------------
+        # TENNIS (tr_1/D)
+        # ----------------------------------------------------
+        raw_tennis = await get_raw(f"tr_1/{day_offset}") # tr_1/1 = завтра, tr_1/6 = через 6 дней
+        tennis_matches = []
+        for line in raw_tennis.split("~"):
+            if "AA" in line and ("challenger" in line.lower() or "itf" in line.lower()):
+                parts = line.split("¬")
+                p1 = next((p[4:] for p in parts if p.startswith("AD")), "?")
+                p2 = next((p[4:] for p in parts if p.startswith("AE")), "?")
+                tour = next((p[6:] for p in parts if p.startswith("AF")), "")
+                tennis_matches.append(f"• 🎾 {p1} – {p2} ({tour})")
+
+        # ----------------------------------------------------
+        # FOOTBALL (fa_1/D)
+        # ----------------------------------------------------
+        raw_football = await get_raw(f"fa_1/{day_offset}") # fa_1/1 = завтра, fa_1/6 = через 6 дней
+        football_matches = []
+        
+        for line in raw_football.split("~"):
+            if "AA" in line:
+                parts = line.split("¬")
+                league = next((p[6:] for p in parts if p.startswith("AF")), "")
+                
+                if any(l in league for l in major_leagues):
+                    home = next((p[4:] for p in parts if p.startswith("AD")), "")
+                    away = next((p[4:] for p in parts if p.startswith("AE")), "")
+                    time_raw = next((p[6:] for p in parts if p.startswith("AH")), "")
+                    # Используем try/except, чтобы избежать падений, если время не указано
+                    try:
+                        time_str = datetime.fromtimestamp(int(time_raw)).strftime('%H:%M')
+                    except:
+                        time_str = '??:??'
+                    
+                    football_matches.append(f"• ⚽ {time_str} | {home} – {away} ({league})")
+
+        
+        # Собираем результат за текущий день
+        if tennis_matches or football_matches:
+            day_text = f"📅 <b>{date_str}</b>:\n\n"
+            if tennis_matches:
+                day_text += "🎾 **Теннис (Челленджеры/ITF)**\n" + "\n".join(tennis_matches[:10]) + "\n\n"
+            if football_matches:
+                day_text += "⚽ **Футбол (Топ-Лиги)**\n" + "\n".join(football_matches[:10]) + "\n\n"
+            
+            all_future_matches.append(day_text)
+            
+    # Отправляем итоговое сообщение
+    if all_future_matches:
+        final_text = "".join(all_future_matches)
+        await message.answer(final_text)
+    else:
+        await message.answer("😴 На ближайшие 6 дней подходящих топ-матчей не найдено.")
+
+
 # --- ТВОИ АСИНХРОННЫЕ ФУНКЦИИ (ЛАЙВ-СКАНЕР И ГЛАВНАЯ ЛОГИКА) ---
 async def get_raw(endpoint):
     async with aiohttp.ClientSession(headers=HEADERS) as s:
-        async with s.get(f"https://d.flashscore.com/x/feed/{endpoint}") as r:
+        # Упрощаем, теперь endpoint может быть "tr_1" или "tr_1/1" и т.д.
+        async with s.get(f"https://d.flashscore.com/x/feed/{endpoint}") as r: 
             return await r.text() if r.status == 200 else ""
 
 async def morning_tennis():
@@ -98,7 +165,7 @@ async def morning_tennis():
     while True:
         now = datetime.now()
         if now.hour == 10 and now.minute < 5 and not morning_sent:
-            # Логика для отправки утреннего сообщения в MY_ID
+            # Логика для отправки утреннего сообщения в MY_ID (дублирует логику /tennis)
             raw = await get_raw("tr_1")
             matches = []
             for line in raw.split("~"):
@@ -119,7 +186,8 @@ async def morning_tennis():
 async def live_scanner():
     while True:
         try:
-            data = await get_raw("tl_1")
+            data = await get_raw("tl_1") # tl_1 - Live
+            # ... (твой код live_scanner, без изменений)
             for line in data.split("~"):
                 if "AA" not in line: continue
                 parts = line.split("¬")
