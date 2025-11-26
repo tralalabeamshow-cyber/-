@@ -11,7 +11,6 @@ from threading import Thread
 # --- КЛЮЧИ И ID ---
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID")
-# НОВЫЙ КЛЮЧ
 FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY") 
 
 if not TOKEN or not MY_ID or not FOOTBALL_API_KEY:
@@ -35,7 +34,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running and awake! Professional API mode."
+    return "Bot is running and awake! FINAL DIAGNOSTIC MODE."
 
 def run_flask_server():
   app.run(host='0.0.0.0', port=RENDER_PORT)
@@ -46,94 +45,59 @@ def keep_alive():
 # ---------------------------------------------
 
 
-# 2. ФУНКЦИИ ДЛЯ РАБОТЫ С НОВЫМ API
-async def get_raw(endpoint):
-    """Отправляет запрос на внешний API с использованием ключа."""
+# 2. ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ СЫРЫХ ДАННЫХ
+async def get_raw_data():
+    """Отправляет запрос на твой API с использованием ключа и возвращает текст ответа."""
     
-    # Заголовки, необходимые для большинства профессиональных API
-    headers = {
+    # ******* ИЗМЕНИ ЭТИ ДВЕ ЧАСТИ ПОД СВОЙ API *******
+    API_URL = "https://v3.football.api-sport.io/fixtures?date=" + datetime.now().strftime('%Y-%m-%d')
+    HEADERS = {
         'x-rapidapi-key': FOOTBALL_API_KEY, 
-        'x-rapidapi-host': 'v3.football.api-sport.io' # Чаще всего используется этот хост
+        'x-rapidapi-host': 'v3.football.api-sport.io' # ИЛИ ТВОЙ ХОСТ
     }
-    
-    # URL для получения сегодняшних матчей (API-FOOTBALL)
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    API_URL = f"https://v3.football.api-sport.io/fixtures?date={date_str}" 
+    # **********************************************
 
-    async with aiohttp.ClientSession(headers=headers) as s: 
+    async with aiohttp.ClientSession(headers=HEADERS) as s: 
         try:
             async with s.get(API_URL, timeout=15) as r:
                 if r.status == 200:
-                    data = await r.json()
-                    # Проверяем, что API вернул успешный ответ
-                    if 'response' in data:
-                        return data['response']
+                    # Важно: возвращаем весь текст ответа, чтобы увидеть структуру
+                    return await r.text() 
                 else:
-                    print(f"Ошибка HTTP: {r.status}")
+                    return f"HTTP Error: {r.status} - {await r.text()}"
         except Exception as e:
-            print(f"Критическая ошибка при запросе к API: {e}")
+            return f"Критическая ошибка при запросе к API: {e}"
             
-        return []
-
-async def get_matches_for_display():
-    """Форматирует данные о матчах для отправки пользователю."""
-    raw_matches = await get_raw("/fixtures")
-    
-    if not raw_matches:
-        return "😔 Сегодняшних матчей не найдено или API не вернул данные."
-
-    # Фильтрация и форматирование (на основе структуры API-FOOTBALL)
-    match_list = []
-    for match in raw_matches[:10]: # Ограничимся 10 матчами для теста
-        
-        home = match['teams']['home']['name']
-        away = match['teams']['away']['name']
-        
-        # Статус матча: 'Time to be defined', 'Not Started', 'Live', 'Match Finished'
-        status = match['fixture']['status']['short']
-        
-        # Счет
-        score_home = match['goals']['home'] if match['goals']['home'] is not None else '0'
-        score_away = match['goals']['away'] if match['goals']['away'] is not None else '0'
-        
-        # Форматирование статуса
-        if status == 'NS':
-            time = datetime.fromtimestamp(match['fixture']['timestamp']).strftime('%H:%M')
-            status_display = f"⏰ {time}"
-        elif status in ('1H', 'HT', '2H', 'ET'):
-            status_display = f"🟢 LIVE"
-        elif status == 'FT':
-            status_display = f"✅ FIN"
-        else:
-            status_display = f"[{status}]"
-            
-        match_list.append(f"{status_display} | <b>{home}</b> {score_home}-{score_away} <b>{away}</b>")
-
-    if not match_list:
-        return "😔 Сегодняшних топ-матчей, которые можно отобразить, не найдено."
-        
-    return "<b>⚽️ ФУТБОЛ СЕГОДНЯ (LIVE):</b>\n\n" + "\n".join(match_list)
-
+        return "Неизвестная ошибка."
 
 # 3. ХЕНДЛЕРЫ КОМАНД 
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     await message.answer(
-        "💪 Бот запущен! Используется **профессиональный API** для получения данных.\n"
-        "Проверим матчи: /football"
+        "💪 Бот запущен! Готовлюсь к ФИНАЛЬНОЙ ДИАГНОСТИКЕ.\n"
+        "Запустите /get_raw_data."
     )
 
-@dp.message(lambda message: message.text == '/football')
+@dp.message(lambda message: message.text == '/get_raw_data')
 async def handle_football_today(message: types.Message):
-    await message.answer("📡 Получаю данные о матчах...")
+    await message.answer("📡 Получаю сырые данные от API...")
     
-    text_to_send = await get_matches_for_display()
+    raw_data = await get_raw_data()
     
-    await message.answer(text_to_send, disable_web_page_preview=True)
+    # Обрезаем ответ, чтобы он не был слишком большим для Telegram
+    content_preview = raw_data[:1000] 
+    if len(raw_data) > 1000:
+        content_preview += "\n\n... (ответ обрезан)"
 
-# 4. ЗАПУСК
+    await message.answer(
+        f"<b>✅ Сырой Ответ от API:</b>\n\n"
+        f"<code>{content_preview}</code>",
+        parse_mode="HTML"
+    )
+# ... (остальные функции не важны для диагностики)
+# 4. ЗАПУСК (Оставить без изменений)
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ПРОФЕССИОНАЛЬНЫЙ API ЗАПУЩЕН.")
+    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: РЕЖИМ СЫРОЙ ДИАГНОСТИКИ ЗАПУЩЕН.")
 
 async def main():
     dp.startup.register(on_startup)
