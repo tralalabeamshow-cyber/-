@@ -2,12 +2,13 @@ import asyncio
 import aiohttp
 import os
 from aiogram import Bot, Dispatcher, types
-from aiogram.client.default import DefaultBotProperties # <-- ИСПРАВЛЕНИЕ: НОВЫЙ ИМПОРТ
+from aiogram.client.default import DefaultBotProperties # <-- Важный импорт для новой версии
 from datetime import datetime
 from flask import Flask
 from threading import Thread
 
 # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ТОКЕНА И ID ---
+# Переменные берутся из настроек Render (Environment Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
 
@@ -23,18 +24,8 @@ except ValueError:
 # ----------------------------------------
 
 # 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
-# ИСПРАВЛЕНИЕ: Используем default=DefaultBotProperties для parse_mode
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
-
-# --- ФИЛЬТР ТОЛЬКО ДЛЯ ТЕБЯ (Опционально) ---
-# Если хочешь, чтобы бот реагировал только на твой ID, раскомментируй эти строчки:
-# class IsAdmin(types.base.TelegramObject):
-#     async def check(self, obj: types.Message) -> bool:
-#         return obj.from_user.id == MY_ID
-# dp.message.filter(IsAdmin())
-# dp.callback_query.filter(IsAdmin())
-# ---------------------------------------------
 
 HEADERS = {"x-fsign": "SW9D1eZo", "User-Agent": "Mozilla/5.0"}
 sent_live = set()
@@ -57,7 +48,7 @@ def keep_alive():
 # ---------------------------------------------
 
 
-# 2. ХЕНДЛЕРЫ КОМАНД (Реагирует на /start)
+# 2. ХЕНДЛЕРЫ КОМАНД (Реагируют на команды)
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     """Отвечает пользователю, когда он пишет /start."""
@@ -67,8 +58,36 @@ async def handle_start(message: types.Message):
         "правилах сканирования, напиши /info."
     )
 
+@dp.message(lambda message: message.text == '/tennis')
+async def handle_tennis_today(message: types.Message):
+    """
+    Запускает функцию сканирования тенниса на сегодня по требованию.
+    """
+    await message.answer("🎾 Ищу челленджеры и ITF на сегодня... Подождите 5-10 секунд.")
+    
+    # 2. Получаем сырые данные
+    raw = await get_raw("tr_1")
+    matches = []
+    
+    # 3. Парсим данные
+    for line in raw.split("~"):
+        if "AA" in line and ("challenger" in line.lower() or "itf" in line.lower()):
+            parts = line.split("¬")
+            p1 = next((p[4:] for p in parts if p.startswith("AD")), "?")
+            p2 = next((p[4:] for p in parts if p.startswith("AE")), "?")
+            tour = next((p[6:] for p in parts if p.startswith("AF")), "")
+            matches.append(f"• {p1} – {p2}\n   {tour}")
 
-# --- ТВОИ АСИНХРОННЫЕ ФУНКЦИИ (ЛАЙВ-СКАНЕР) ---
+    # 4. Отправляем результат
+    now = datetime.now()
+    if matches:
+        text = f"<b>🎾 ТЕННИС НА СЕГОДНЯ ({now.strftime('%d.%m')})</b>\nНа что смотреть:\n\n" + "\n\n".join(matches[:15])
+        await message.answer(text) 
+    else:
+        await message.answer("😔 На сегодня челленджеров/ITF в расписании не найдено.")
+
+
+# --- ТВОИ АСИНХРОННЫЕ ФУНКЦИИ (ЛАЙВ-СКАНЕР И ГЛАВНАЯ ЛОГИКА) ---
 async def get_raw(endpoint):
     async with aiohttp.ClientSession(headers=HEADERS) as s:
         async with s.get(f"https://d.flashscore.com/x/feed/{endpoint}") as r:
@@ -79,6 +98,7 @@ async def morning_tennis():
     while True:
         now = datetime.now()
         if now.hour == 10 and now.minute < 5 and not morning_sent:
+            # Логика для отправки утреннего сообщения в MY_ID
             raw = await get_raw("tr_1")
             matches = []
             for line in raw.split("~"):
@@ -152,4 +172,3 @@ async def main():
 if __name__ == "__main__":
     keep_alive() # <-- Сначала запускаем веб-сервер
     asyncio.run(main()) # <-- Затем запускаем бота
-
