@@ -4,12 +4,12 @@ import os
 import json 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
-from datetime import datetime, timedelta
+from datetime import datetime
 from flask import Flask
 from threading import Thread
 
 # --- КЛЮЧИ И ID ---
-# ВНИМАНИЕ: КЛЮЧ API ВСТАВЛЯЕТСЯ ЗДЕСЬ НАПРЯМУЮ ДЛЯ ДИАГНОСТИКИ!
+# Для TheSportsDB ключ не нужен, используем "1" для публичного доступа
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
 
@@ -28,13 +28,9 @@ except ValueError:
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# НОВЫЕ ЗАГОЛОВКИ ДЛЯ API-FOOTBALL/RAPIDAPI
-# >>>>>>>>>> ВСТАВЬ СВОЙ КЛЮЧ СЮДА! <<<<<<<<<<
-HEADERS = {
-    "x-rapidapi-key": "c167e66bd3msh35985a092c838b0p123034jsn0fff643cbbab", 
-    "x-rapidapi-host": "api-football-v1.p.rapidapi.com"
-}
-# -----------------------------------------
+# TheSportsDB: НЕ ТРЕБУЕТ ЗАГОЛОВКОВ ИЛИ КЛЮЧА
+# Мы используем публичный ключ "1"
+# HEADERS = {} # Убираем заголовки
 
 sent_live = set()
 
@@ -59,18 +55,19 @@ def keep_alive():
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     await message.answer(
-        "💪 Бот-сканер запущен! Используется прямой ключ Sports API. "
+        "💪 Бот-сканер запущен! Используется **TheSportsDB** (без ключа). "
         "Проверим футбол командой /football."
     )
 
 @dp.message(lambda message: message.text == '/football')
 async def handle_football_today(message: types.Message):
-    await message.answer("⚽ Ищу топ-лиги на сегодня... Подождите 5-10 секунд.")
+    await message.answer("⚽ Ищу матчи на сегодня... Подождите 5-10 секунд.")
     
+    # Дата в формате YYYY-MM-DD
     date_str = datetime.now().strftime('%Y-%m-%d')
     
-    # API запрос
-    API_URL = f"https://api-football-v1.p.rapidapi.com/v3/fixtures?date={date_str}" 
+    # API запрос для TheSportsDB: https://www.thesportsdb.com/api/v1/json/1/eventsday.php?d=2025-11-26
+    API_URL = f"https://www.thesportsdb.com/api/v1/json/1/eventsday.php?d={date_str}" 
     
     matches = await get_matches_from_api(API_URL)
     
@@ -78,21 +75,20 @@ async def handle_football_today(message: types.Message):
         text = f"<b>⚽ ФУТБОЛ НА СЕГОДНЯ ({datetime.now().strftime('%d.%m')})</b>\n\n" + "\n\n".join(matches)
         await message.answer(text) 
     else:
-        # Теперь выводим более детальное сообщение
-        await message.answer("😔 На сегодня топ-матчей не найдено.\n(API-ключ вставлен напрямую в код, если матчи есть, возможно, ключ неактивен/неверный HOST).")
+        await message.answer("😔 На сегодня матчей не найдено.\n(Если матчи есть, возможно, проблема в API-ссылке).")
 
 
 # --- НОВЫЕ АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С JSON ---
 async def get_matches_from_api(url):
-    """Получает и парсит данные в формате JSON."""
-    # ID ТОП-ЛИГ: 39-АПЛ, 140-ЛаЛига, 61-Лига 1, 78-Бундеслига, 135-Серия А.
-    major_leagues = [39, 140, 61, 78, 135]
+    """Получает и парсит данные в формате JSON из TheSportsDB."""
+    # TheSportsDB дает матчи по всем видам спорта, нам нужен только футбол.
+    football_events = []
     
-    async with aiohttp.ClientSession(headers=HEADERS) as s:
+    # Заголовки не нужны
+    async with aiohttp.ClientSession() as s: 
         async with s.get(url) as r:
             
             if r.status != 200:
-                # Если ключ неверный, статус часто 403 Forbidden или 401 Unauthorized.
                 print(f"Ошибка API: {r.status} - {await r.text()}")
                 return []
             
@@ -102,32 +98,31 @@ async def get_matches_from_api(url):
                 print("Ошибка: API вернул невалидный JSON.")
                 return []
             
-            if 'response' not in data:
+            # Проверяем, что в ответе есть события
+            if 'events' not in data or data['events'] is None:
                 return []
                 
-            matches = []
-            
-            for fixture in data['response']:
-                league_id = fixture['league']['id']
-                
-                if league_id in major_leagues:
-                    home = fixture['teams']['home']['name']
-                    away = fixture['teams']['away']['name']
-                    league_name = fixture['league']['name']
-                    time_raw = fixture['fixture']['timestamp']
+            for event in data['events']:
+                # Фильтруем по футболу (Soccer)
+                if event.get('strSport') == 'Soccer': 
                     
-                    time_str = datetime.fromtimestamp(time_raw).strftime('%H:%M')
+                    home = event.get('strHomeTeam', '?')
+                    away = event.get('strAwayTeam', '?')
+                    league_name = event.get('strLeague', '?')
+                    time_str = event.get('strTime', '??:??')
                     
-                    matches.append(f"• ⚽ {time_str} | {home} – {away} ({league_name})")
+                    # Фильтруем, чтобы не брать совсем уж мелкие лиги
+                    if "League" in league_name or "Cup" in league_name: 
+                        football_events.append(f"• ⚽ {time_str} | {home} – {away} ({league_name})")
                     
-            return matches
+            return football_events
 
 # УБИРАЕМ все старые функции
 async def get_raw(endpoint): pass 
 async def morning_tennis(): pass
 
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ПРЯМАЯ ДИАГНОСТИКА С КЛЮЧОМ В КОДЕ.")
+    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ПЕРЕХОД НА SPORTSDB.")
 
 async def main():
     dp.startup.register(on_startup)
