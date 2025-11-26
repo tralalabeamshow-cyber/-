@@ -9,7 +9,6 @@ from flask import Flask
 from threading import Thread
 
 # --- КЛЮЧИ И ID ---
-# Для TheSportsDB ключ не нужен, используем "1" для публичного доступа
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
 
@@ -27,10 +26,6 @@ except ValueError:
 # 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
-
-# TheSportsDB: НЕ ТРЕБУЕТ ЗАГОЛОВКОВ ИЛИ КЛЮЧА
-# Мы используем публичный ключ "1"
-# HEADERS = {} # Убираем заголовки
 
 sent_live = set()
 
@@ -55,74 +50,52 @@ def keep_alive():
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     await message.answer(
-        "💪 Бот-сканер запущен! Используется **TheSportsDB** (без ключа). "
-        "Проверим футбол командой /football."
+        "💪 Бот-сканер запущен! Главная задача: проверить соединение с интернетом командой /test_connection"
     )
+
+@dp.message(lambda message: message.text == '/test_connection')
+async def handle_connection_test(message: types.Message):
+    await message.answer("📡 Проверяю подключение к Google...")
+    
+    test_result = await test_internet_connection()
+    
+    await message.answer(test_result) 
 
 @dp.message(lambda message: message.text == '/football')
 async def handle_football_today(message: types.Message):
-    await message.answer("⚽ Ищу матчи на сегодня... Подождите 5-10 секунд.")
+    await message.answer("⚠️ Сначала проверь, может ли бот вообще выйти в интернет, используя команду /test_connection.")
     
-    # Дата в формате YYYY-MM-DD
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    
-    # API запрос для TheSportsDB: https://www.thesportsdb.com/api/v1/json/1/eventsday.php?d=2025-11-26
-    API_URL = f"https://www.thesportsdb.com/api/v1/json/1/eventsday.php?d={date_str}" 
-    
-    matches = await get_matches_from_api(API_URL)
-    
-    if matches:
-        text = f"<b>⚽ ФУТБОЛ НА СЕГОДНЯ ({datetime.now().strftime('%d.%m')})</b>\n\n" + "\n\n".join(matches)
-        await message.answer(text) 
-    else:
-        await message.answer("😔 На сегодня матчей не найдено.\n(Если матчи есть, возможно, проблема в API-ссылке).")
 
-
-# --- НОВЫЕ АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С JSON ---
-async def get_matches_from_api(url):
-    """Получает и парсит данные в формате JSON из TheSportsDB."""
-    # TheSportsDB дает матчи по всем видам спорта, нам нужен только футбол.
-    football_events = []
+# --- ДИАГНОСТИЧЕСКАЯ ФУНКЦИЯ ---
+async def test_internet_connection():
+    """Проверяет, может ли бот сделать внешний HTTP-запрос."""
+    url = "https://www.google.com" # Пробуем подключиться к Google
     
-    # Заголовки не нужны
-    async with aiohttp.ClientSession() as s: 
-        async with s.get(url) as r:
-            
-            if r.status != 200:
-                print(f"Ошибка API: {r.status} - {await r.text()}")
-                return []
-            
-            try:
-                data = await r.json()
-            except json.JSONDecodeError:
-                print("Ошибка: API вернул невалидный JSON.")
-                return []
-            
-            # Проверяем, что в ответе есть события
-            if 'events' not in data or data['events'] is None:
-                return []
+    try:
+        async with aiohttp.ClientSession() as s: 
+            # Установили таймаут 10 секунд
+            async with s.get(url, timeout=10) as r: 
                 
-            for event in data['events']:
-                # Фильтруем по футболу (Soccer)
-                if event.get('strSport') == 'Soccer': 
+                if r.status == 200:
+                    return f"✅ УСПЕХ: Соединение установлено. Код ответа: {r.status}."
+                else:
+                    return f"❌ ОШИБКА: Соединение установлено, но код ответа: {r.status}."
                     
-                    home = event.get('strHomeTeam', '?')
-                    away = event.get('strAwayTeam', '?')
-                    league_name = event.get('strLeague', '?')
-                    time_str = event.get('strTime', '??:??')
-                    
-                    # Фильтруем, чтобы не брать совсем уж мелкие лиги
-                    if "League" in league_name or "Cup" in league_name: 
-                        football_events.append(f"• ⚽ {time_str} | {home} – {away} ({league_name})")
-                    
-            return football_events
+    except aiohttp.ClientConnectorError:
+        return "❌ ОШИБКА: Не удалось установить соединение (ClientConnectorError)."
+    except asyncio.TimeoutError:
+        return "❌ ОШИБКА: Превышено время ожидания (TimeoutError)."
+    except Exception as e:
+        return f"❌ НЕИЗВЕСТНАЯ ОШИБКА: {type(e).__name__} - {e}"
+        
 
 # УБИРАЕМ все старые функции
+async def get_matches_from_api(url): pass
 async def get_raw(endpoint): pass 
 async def morning_tennis(): pass
 
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ПЕРЕХОД НА SPORTSDB.")
+    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ТЕСТ СОЕДИНЕНИЯ ЗАПУЩЕН.")
 
 async def main():
     dp.startup.register(on_startup)
