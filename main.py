@@ -2,12 +2,12 @@ import asyncio
 import aiohttp
 import os
 from aiogram import Bot, Dispatcher, types
+from aiogram.client.default import DefaultBotProperties # <-- ИСПРАВЛЕНИЕ: НОВЫЙ ИМПОРТ
 from datetime import datetime
 from flask import Flask
 from threading import Thread
 
 # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ТОКЕНА И ID ---
-# Эти переменные берутся из настроек Render (Environment Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
 
@@ -23,17 +23,18 @@ except ValueError:
 # ----------------------------------------
 
 # 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
-bot = Bot(token=TOKEN, parse_mode="HTML")
+# ИСПРАВЛЕНИЕ: Используем default=DefaultBotProperties для parse_mode
+bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# --- ФИЛЬТР: ЕСЛИ ХОЧЕШЬ, ЧТОБЫ БОТ РЕАГИРОВАЛ ТОЛЬКО НА ТЕБЯ (Опционально) ---
-# Если раскомментируешь (уберешь #), никто, кроме тебя, не сможет писать боту
+# --- ФИЛЬТР ТОЛЬКО ДЛЯ ТЕБЯ (Опционально) ---
+# Если хочешь, чтобы бот реагировал только на твой ID, раскомментируй эти строчки:
 # class IsAdmin(types.base.TelegramObject):
 #     async def check(self, obj: types.Message) -> bool:
 #         return obj.from_user.id == MY_ID
 # dp.message.filter(IsAdmin())
 # dp.callback_query.filter(IsAdmin())
-# --------------------------------------------------------------------------
+# ---------------------------------------------
 
 HEADERS = {"x-fsign": "SW9D1eZo", "User-Agent": "Mozilla/5.0"}
 sent_live = set()
@@ -45,7 +46,6 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    # Эта функция просто отвечает "OK" на запрос пингера (UptimeRobot)
     return "Bot is running and awake!"
 
 def run_flask_server():
@@ -152,3 +152,4 @@ async def main():
 if __name__ == "__main__":
     keep_alive() # <-- Сначала запускаем веб-сервер
     asyncio.run(main()) # <-- Затем запускаем бота
+
