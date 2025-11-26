@@ -9,12 +9,12 @@ from flask import Flask
 from threading import Thread
 
 # --- КЛЮЧИ И ID ---
+# ВНИМАНИЕ: КЛЮЧ API ВСТАВЛЯЕТСЯ ЗДЕСЬ НАПРЯМУЮ ДЛЯ ДИАГНОСТИКИ!
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
-SPORTS_API_KEY = os.getenv("SPORTS_API_KEY") 
 
-if not TOKEN or not MY_ID or not SPORTS_API_KEY:
-    print("Ошибка: Не установлены BOT_TOKEN, MY_TELEGRAM_ID или SPORTS_API_KEY!")
+if not TOKEN or not MY_ID:
+    print("Ошибка: Переменные BOT_TOKEN и MY_TELEGRAM_ID не установлены!")
     exit()
 
 try:
@@ -29,12 +29,13 @@ bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
 # НОВЫЕ ЗАГОЛОВКИ ДЛЯ API-FOOTBALL/RAPIDAPI
-# Убедись, что host соответствует тому, что RapidAPI тебе дал!
+# >>>>>>>>>> ВСТАВЬ СВОЙ КЛЮЧ СЮДА! <<<<<<<<<<
 HEADERS = {
-    "x-rapidapi-key": SPORTS_API_KEY,
+    "x-rapidapi-key": "c167e66bd3msh35985a092c838b0p123034jsn0fff643cbbab", 
     "x-rapidapi-host": "api-football-v1.p.rapidapi.com"
 }
-# ... (остальной код инициализации без изменений)
+# -----------------------------------------
+
 sent_live = set()
 
 # --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
@@ -58,8 +59,8 @@ def keep_alive():
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     await message.answer(
-        "💪 Бот-сканер запущен! Теперь я использую стабильный Sports API "
-        "для поиска **футбольных** матчей. Теннис пока отключен. "
+        "💪 Бот-сканер запущен! Используется прямой ключ Sports API. "
+        "Проверим футбол командой /football."
     )
 
 @dp.message(lambda message: message.text == '/football')
@@ -68,7 +69,7 @@ async def handle_football_today(message: types.Message):
     
     date_str = datetime.now().strftime('%Y-%m-%d')
     
-    # 1. API запрос - ИСПОЛЬЗУЕМ ТОЛЬКО URL ДЛЯ FIXTURES
+    # API запрос
     API_URL = f"https://api-football-v1.p.rapidapi.com/v3/fixtures?date={date_str}" 
     
     matches = await get_matches_from_api(API_URL)
@@ -78,7 +79,7 @@ async def handle_football_today(message: types.Message):
         await message.answer(text) 
     else:
         # Теперь выводим более детальное сообщение
-        await message.answer("😔 На сегодня топ-матчей не найдено.\nЕсли матчи есть, проверьте, пожалуйста, правильность **КЛЮЧА API**.")
+        await message.answer("😔 На сегодня топ-матчей не найдено.\n(API-ключ вставлен напрямую в код, если матчи есть, возможно, ключ неактивен/неверный HOST).")
 
 
 # --- НОВЫЕ АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С JSON ---
@@ -91,6 +92,7 @@ async def get_matches_from_api(url):
         async with s.get(url) as r:
             
             if r.status != 200:
+                # Если ключ неверный, статус часто 403 Forbidden или 401 Unauthorized.
                 print(f"Ошибка API: {r.status} - {await r.text()}")
                 return []
             
@@ -120,12 +122,12 @@ async def get_matches_from_api(url):
                     
             return matches
 
-# УБИРАЕМ все старые функции, связанные с Flashscore
+# УБИРАЕМ все старые функции
 async def get_raw(endpoint): pass 
 async def morning_tennis(): pass
 
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ 2025 ПЕРЕКЛЮЧЕН НА SPORTS API.")
+    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: ПРЯМАЯ ДИАГНОСТИКА С КЛЮЧОМ В КОДЕ.")
 
 async def main():
     dp.startup.register(on_startup)
