@@ -1,16 +1,16 @@
 import asyncio
 import aiohttp
-import os # <-- Добавлен для чтения переменной окружения
+import os
 from aiogram import Bot, Dispatcher, types
 from datetime import datetime
 from flask import Flask
 from threading import Thread
 
 # --- БЕЗОПАСНОЕ ПОЛУЧЕНИЕ ТОКЕНА И ID ---
-# ⚠️ ВАЖНО: Токен и ID будут браться из настроек Render (переменные окружения)
+# Эти переменные берутся из настроек Render (Environment Variables)
 TOKEN = os.getenv("BOT_TOKEN")
 MY_ID = os.getenv("MY_TELEGRAM_ID") 
-# Если переменные не установлены, код не запустится, что безопаснее.
+
 if not TOKEN or not MY_ID:
     print("Ошибка: Переменные BOT_TOKEN и MY_TELEGRAM_ID не установлены!")
     exit()
@@ -21,8 +21,43 @@ except ValueError:
     print("Ошибка: MY_TELEGRAM_ID должен быть числом!")
     exit()
 # ----------------------------------------
-# ... ВСТАВЬ ЭТОТ БЛОК КОДА ГДЕ-НИБУДЬ ПОД ОСНОВНЫМИ ИМПОРТАМИ И ПЕРЕМЕННЫМИ ...
 
+# 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
+bot = Bot(token=TOKEN, parse_mode="HTML")
+dp = Dispatcher()
+
+# --- ФИЛЬТР: ЕСЛИ ХОЧЕШЬ, ЧТОБЫ БОТ РЕАГИРОВАЛ ТОЛЬКО НА ТЕБЯ (Опционально) ---
+# Если раскомментируешь (уберешь #), никто, кроме тебя, не сможет писать боту
+# class IsAdmin(types.base.TelegramObject):
+#     async def check(self, obj: types.Message) -> bool:
+#         return obj.from_user.id == MY_ID
+# dp.message.filter(IsAdmin())
+# dp.callback_query.filter(IsAdmin())
+# --------------------------------------------------------------------------
+
+HEADERS = {"x-fsign": "SW9D1eZo", "User-Agent": "Mozilla/5.0"}
+sent_live = set()
+morning_sent = False
+
+# --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
+RENDER_PORT = int(os.environ.get("PORT", 10000))
+app = Flask('')
+
+@app.route('/')
+def home():
+    # Эта функция просто отвечает "OK" на запрос пингера (UptimeRobot)
+    return "Bot is running and awake!"
+
+def run_flask_server():
+  app.run(host='0.0.0.0', port=RENDER_PORT)
+
+def keep_alive():
+    t = Thread(target=run_flask_server)
+    t.start()
+# ---------------------------------------------
+
+
+# 2. ХЕНДЛЕРЫ КОМАНД (Реагирует на /start)
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     """Отвечает пользователю, когда он пишет /start."""
@@ -33,39 +68,12 @@ async def handle_start(message: types.Message):
     )
 
 
-bot = Bot(token=TOKEN, parse_mode="HTML")
-dp = Dispatcher()
-
-HEADERS = {"x-fsign": "SW9D1eZo", "User-Agent": "Mozilla/5.0"}
-sent_live = set()
-morning_sent = False
-
-# --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
-# Render выдаст нам порт, который нужно слушать
-RENDER_PORT = int(os.environ.get("PORT", 10000))
-app = Flask('')
-
-@app.route('/')
-def home():
-    # Эта функция просто отвечает "OK" на запрос пингера (UptimeRobot)
-    return "Bot is running and awake!"
-
-def run_flask_server():
-  # Запускаем Flask на порту, который требует Render
-  app.run(host='0.0.0.0', port=RENDER_PORT)
-
-def keep_alive():
-    t = Thread(target=run_flask_server)
-    t.start()
-# ---------------------------------------------
-
-# --- ТВОИ АСИНХРОННЫЕ ФУНКЦИИ (ОСТАЛИСЬ БЕЗ ИЗМЕНЕНИЙ) ---
+# --- ТВОИ АСИНХРОННЫЕ ФУНКЦИИ (ЛАЙВ-СКАНЕР) ---
 async def get_raw(endpoint):
     async with aiohttp.ClientSession(headers=HEADERS) as s:
         async with s.get(f"https://d.flashscore.com/x/feed/{endpoint}") as r:
             return await r.text() if r.status == 200 else ""
 
-# УТРЕННИЙ СПИСОК ТЕННИСА (в 10:00 МСК)
 async def morning_tennis():
     global morning_sent
     while True:
@@ -88,7 +96,6 @@ async def morning_tennis():
             morning_sent = False
         await asyncio.sleep(60)
 
-# ЛАЙВ-СКАНЕР (футбол + теннис)
 async def live_scanner():
     while True:
         try:
