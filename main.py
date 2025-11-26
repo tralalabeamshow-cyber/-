@@ -1,10 +1,9 @@
 import asyncio
 import aiohttp
 import os
-import json 
+import json # Добавляем json для обработки ответа
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
-from datetime import datetime
 from flask import Flask
 from threading import Thread
 
@@ -27,15 +26,13 @@ except ValueError:
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-sent_live = set()
-
 # --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
 RENDER_PORT = int(os.environ.get("PORT", 10000))
 app = Flask('')
 
 @app.route('/')
 def home():
-    return "Bot is running and awake!"
+    return "Bot is running and awake! API testing mode."
 
 def run_flask_server():
   app.run(host='0.0.0.0', port=RENDER_PORT)
@@ -50,68 +47,61 @@ def keep_alive():
 @dp.message(lambda message: message.text == '/start')
 async def handle_start(message: types.Message):
     await message.answer(
-        "💪 Бот-сканер запущен! Используется **TheSportsDB** (без ключа). "
-        "Проверим футбол командой /football."
+        "💪 Бот запущен! Готовлюсь протестировать новый API: https://api.sstats.net. "
+        "Используй команду /test_api."
     )
 
-@dp.message(lambda message: message.text == '/football')
-async def handle_football_today(message: types.Message):
-    await message.answer("⚽ Ищу матчи на сегодня... Подождите 5-10 секунд.")
+@dp.message(lambda message: message.text == '/test_api')
+async def handle_api_test(message: types.Message):
+    await message.answer("📡 Отправляю запрос на https://api.sstats.net...")
     
-    date_str = datetime.now().strftime('%Y-%m-%d')
+    # Твоя новая ссылка
+    API_URL = "https://api.sstats.net"
     
-    # API запрос для TheSportsDB: используется публичный ключ "1"
-    API_URL = f"https://www.thesportsdb.com/api/v1/json/1/eventsday.php?d={date_str}" 
+    response_content = await get_api_response(API_URL)
     
-    matches = await get_matches_from_api(API_URL)
-    
-    if matches:
-        text = f"<b>⚽ ФУТБОЛ НА СЕГОДНЯ ({datetime.now().strftime('%d.%m')})</b>\n\n" + "\n\n".join(matches)
-        await message.answer(text) 
+    if response_content:
+        # Обрезаем ответ, чтобы он не был слишком большим для Telegram
+        content_preview = response_content[:800] 
+        if len(response_content) > 800:
+            content_preview += "..."
+
+        await message.answer(
+            f"<b>✅ Ответ от API (первые 800 символов):</b>\n\n"
+            f"<code>{content_preview}</code>\n\n"
+            f"<i>Общая длина ответа: {len(response_content)} символов.</i>",
+            parse_mode="HTML"
+        ) 
     else:
-        await message.answer("😔 На сегодня матчей не найдено. Проблема, скорее всего, решена. Попробуйте завтра или проверьте, есть ли сегодня футбольные матчи в крупных лигах.")
+        await message.answer("😔 Ошибка: Не удалось получить ответ или API вернул пустые данные.")
 
 
-# --- НОВЫЕ АСИНХРОННЫЕ ФУНКЦИИ ДЛЯ РАБОТЫ С JSON ---
-async def get_matches_from_api(url):
-    """Получает и парсит данные в формате JSON из TheSportsDB."""
-    football_events = []
-    
+# --- ФУНКЦИЯ ДЛЯ ТЕСТИРОВАНИЯ API ---
+async def get_api_response(url):
+    """Отправляет запрос GET на API и возвращает содержимое как текст."""
     async with aiohttp.ClientSession() as s: 
         try:
             async with s.get(url, timeout=10) as r:
                 
-                if r.status != 200:
-                    print(f"Ошибка API (TheSportsDB): {r.status} - {await r.text()}")
-                    return []
-                
-                data = await r.json()
-                
-                if 'events' not in data or data['events'] is None:
-                    return []
+                if r.status == 200:
+                    # Возвращаем весь ответ как текст
+                    return await r.text()
+                else:
+                    print(f"Ошибка HTTP: {r.status}")
+                    return f"HTTP Error: {r.status}"
                     
-                for event in data['events']:
-                    if event.get('strSport') == 'Soccer': 
-                        home = event.get('strHomeTeam', '?')
-                        away = event.get('strAwayTeam', '?')
-                        league_name = event.get('strLeague', '?')
-                        time_str = event.get('strTime', '??:??')
-                        
-                        # Фильтр по крупным лигам (или просто по наличию слов League/Cup)
-                        if "League" in league_name or "Cup" in league_name: 
-                            football_events.append(f"• ⚽ {time_str} | {home} – {away} ({league_name})")
-                        
-                return football_events
         except Exception as e:
             print(f"Критическая ошибка при запросе: {e}")
-            return []
+            return None
+        
 
 # УБИРАЕМ все старые функции
-async def get_raw(endpoint): pass 
+async def get_matches_from_api(url): pass 
+async def download_text_file(url): pass 
 async def morning_tennis(): pass
 
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: СТАРТ ПОСЛЕ ИСПРАВЛЕНИЯ ЗАВИСИМОСТЕЙ.")
+    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: РЕЖИМ ТЕСТИРОВАНИЯ API ЗАПУЩЕН.")
 
 async def main():
     dp.startup.register(on_startup)
