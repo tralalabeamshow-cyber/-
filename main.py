@@ -26,9 +26,12 @@ except ValueError:
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-HEADERS = {"x-fsign": "SW9D1eZo", "User-Agent": "Mozilla/5.0"}
+HEADERS = {"x-fsign": "SNQ_wNYt", "User-Agent": "Mozilla/5.0"}
 sent_live = set()
 morning_sent = False
+
+
+
 
 # --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
 RENDER_PORT = int(os.environ.get("PORT", 10000))
