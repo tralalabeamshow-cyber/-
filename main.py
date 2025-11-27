@@ -1,151 +1,110 @@
+# main.py — ФУТБОЛ-АВТОПИЛОТ 2025 на Render + API-Football (мои 3 триггера)
 import asyncio
 import aiohttp
 import os
-import json 
 from aiogram import Bot, Dispatcher, types
 from aiogram.client.default import DefaultBotProperties
 from datetime import datetime
 from flask import Flask
 from threading import Thread
 
-# --- КОНФИГУРАЦИЯ ---
+# --- КОНФИГ ---
 TOKEN = os.getenv("BOT_TOKEN")
-MY_ID = os.getenv("MY_TELEGRAM_ID")
-FOOTBALL_API_KEY = os.getenv("FOOTBALL_API_KEY") 
+MY_ID = int(os.getenv("MY_TELEGRAM_ID"))
+API_KEY = os.getenv("FOOTBALL_API_KEY")
 
-if not TOKEN or not MY_ID or not FOOTBALL_API_KEY:
-    print("Ошибка: Установите BOT_TOKEN, MY_TELEGRAM_ID и FOOTBALL_API_KEY в переменных окружения Render!")
+if not all([TOKEN, MY_ID, API_KEY]):
+    print("ОШИБКА: Установи BOT_TOKEN, MY_TELEGRAM_ID и FOOTBALL_API_KEY в переменных окружения!")
     exit()
 
-try:
-    MY_ID = int(MY_ID)
-except ValueError:
-    print("Ошибка: MY_TELEGRAM_ID должен быть числом!")
-    exit()
-# ----------------------------------------
-
-# 1. ОБЪЯВЛЕНИЕ БОТА И ДИСПЕТЧЕРА
 bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode="HTML"))
 dp = Dispatcher()
 
-# --- ВЕБ-СЕРВЕР ДЛЯ ОБХОДА "СНА" (RENDER) ---
-RENDER_PORT = int(os.environ.get("PORT", 10000))
+# Flask keep-alive
 app = Flask('')
-
 @app.route('/')
-def home():
-    return "Bot is running and awake! Football service operational."
+def home(): return "Football autopilot 2025 alive"
 
-def run_flask_server():
-  app.run(host='0.0.0.0', port=RENDER_PORT)
+def run_flask(): app.run(host='0.0.0.0', port=os.environ.get("PORT", 10000))
+def keep_alive(): Thread(target=run_flask, daemon=True).start()
 
-def keep_alive():
-    t = Thread(target=run_flask_server)
-    t.start()
-# ---------------------------------------------
+# --- API-FOOTBALL ---
+HEADERS = {
+    'x-rapidapi-key': API_KEY,
+    'x-rapidapi-host': 'v3.football.api-sports.io'
+}
+LIVE_URL = "https://v3.football.api-sports.io/fixtures?live=all"
 
+sent_matches = set()  # чтобы не спамить один и тот же матч
 
-# 2. ФУНКЦИИ ДЛЯ РАБОТЫ С API-FOOTBALL
-async def get_raw():
-    """Отправляет запрос на API-FOOTBALL и возвращает массив матчей."""
-    
-    # Заголовки API-FOOTBALL
-    headers = {
-        'x-rapidapi-key': FOOTBALL_API_KEY, 
-        'x-rapidapi-host': 'v3.football.api-sport.io'
-    }
-    
-    # URL для получения сегодняшних матчей
-    date_str = datetime.now().strftime('%Y-%m-%d')
-    API_URL = f"https://v3.football.api-sport.io/fixtures?date={date_str}" 
-
-    async with aiohttp.ClientSession(headers=headers) as s: 
+async def get_live_matches():
+    async with aiohttp.ClientSession(headers=HEADERS) as session:
         try:
-            async with s.get(API_URL, timeout=15) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    # Защита: Проверяем наличие 'response' и его содержимое
-                    if 'response' in data and isinstance(data['response'], list):
-                        return data['response']
-                    
-                    print(f"API Error (No response list): {data.get('errors', 'Unknown API Error')}")
-                    return []
-                else:
-                    print(f"Ошибка HTTP: {r.status}")
-        except Exception as e:
-            print(f"Критическая ошибка при запросе к API: {e}")
-            
-        return []
+            async with session.get(LIVE_URL, timeout=20) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get("response", [])
+        except: pass
+    return []
 
-async def get_matches_for_display():
-    """Форматирует данные о матчах для отправки пользователю."""
-    raw_matches = await get_raw()
-    
-    if not raw_matches:
-        return "😔 Сегодняшних матчей не найдено или превышен лимит API."
-
-    match_list = []
-    
-    for match in raw_matches[:15]: 
+# --- ОСНОВНОЙ СКАНЕР (мои 3 триггера) ---
+async def live_scanner():
+    while True:
         try:
-            home = match['teams']['home']['name']
-            away = match['teams']['away']['name']
-            status = match['fixture']['status']['short']
-            
-            score_home = match['goals']['home'] if match['goals']['home'] is not None else '0'
-            score_away = match['goals']['away'] if match['goals']['away'] is not None else '0'
-            
-            # Форматирование статуса
-            if status == 'NS': 
-                time = datetime.fromtimestamp(match['fixture']['timestamp']).strftime('%H:%M')
-                status_display = f"⏰ {time}"
-            elif status in ('1H', 'HT', '2H', 'ET', 'P', 'BT'):
-                status_display = f"🟢 LIVE"
-            elif status == 'FT': 
-                status_display = f"✅ FIN"
-            else:
-                status_display = f"[{status}]"
-                
-            league_name = match['league']['name']
-            
-            match_list.append(f"({league_name}) {status_display} | <b>{home}</b> {score_home}-{score_away} <b>{away}</b>")
+            matches = await get_live_matches()
+            for m in matches:
+                try:
+                    fixture = m["fixture"]
+                    teams = m["teams"]
+                    goals = m["goals"]
+                    league = m["league"]["name"]
 
-        except KeyError as e:
-            print(f"Ошибка парсинга одного матча: Missing key {e}")
-            continue
+                    match_id = fixture["id"]
+                    if match_id in sent_matches: continue
 
-    if not match_list:
-        return "😔 Не удалось получить матчи, хотя API ответил (проблема парсинга)."
-        
-    return "<b>⚽️ ФУТБОЛ СЕГОДНЯ:</b>\n\n" + "\n".join(match_list)
+                    home = teams["home"]["name"]
+                    away = teams["away"]["name"]
+                    score = f"{goals['home'] or 0}:{goals['away'] or 0}"
+                    minute = fixture["status"]["elapsed"] or 0
 
+                    # Фильтр только топ-лиги
+                    if not any(x in league for x in ["Premier League","La Liga","Bundesliga","Serie A","Ligue 1","Champions League","Europa League"]):
+                        continue
 
-# 3. ХЕНДЛЕРЫ КОМАНД 
-@dp.message(lambda message: message.text == '/start')
-async def handle_start(message: types.Message):
-    # ****************** ИСПРАВЛЕНО ******************
-    await message.answer(
-        "💪 Бот запущен! Используется **API-FOOTBALL**.\n"
-        "Проверим матчи: /football"
-    )
-    # **********************************************
+                    signal = None
+                    if 27 <= minute <= 38 and score == "0:0":
+                        signal = f"ФУТБОЛ ТБ 1.5\n28–38′ | 0:0\n{home} – {away}\n{league}"
+                    elif minute >= 72 and score in ["1:0", "0:1"]:
+                        signal = f"ФУТБОЛ ТБ 2.5\n72+′ | {score}\n{home} – {away}\n{league}"
+                    elif minute >= 65 and score == "1:1":
+                        signal = f"ФУТБОЛ ТБ 2.5\n65+′ | 1:1\n{home} – {away}\n{league}"
 
-@dp.message(lambda message: message.text == '/football')
-async def handle_football_today(message: types.Message):
-    await message.answer("📡 Получаю данные о матчах...")
-    
-    text_to_send = await get_matches_for_display()
-    
-    await message.answer(text_to_send, disable_web_page_preview=True)
+                    if signal:
+                        await bot.send_message(MY_ID, signal)
+                        sent_matches.add(match_id)
 
-# 4. ЗАПУСК
+                except: continue
+        except: pass
+        await asyncio.sleep(35)  # каждые 35 сек
+
+# --- КОМАНДЫ ---
+@dp.message(lambda m: m.text and m.text.lower() == "/start")
+async def start(msg: types.Message):
+    await msg.answer("Футбол-автопилот 2025 запущен!\nМои 3 железных триггера работают 24/7")
+
+@dp.message(lambda m: m.text and m.text.lower() == "/status")
+async def status(msg: types.Message):
+    await msg.answer(f"Бот живой\nАктивных триггеров: {len(sent_matches)}\nВремя: {datetime.now().strftime('%H:%M')}")
+
+# --- ЗАПУСК ---
 async def on_startup():
-    await bot.send_message(MY_ID, "ОБЩИЙ БОТ: API-FOOTBALL ЗАПУЩЕН.")
+    await bot.send_message(MY_ID, "ФУТБОЛ-АВТОПИЛОТ 2025 ЗАПУЩЕН!\nТриггеры: 27–38′ 0:0 → ТБ 1.5\n72+′ 1:0/0:1 → ТБ 2.5\n65+′ 1:1 → ТБ 2.5")
+    asyncio.create_task(live_scanner())
 
 async def main():
     dp.startup.register(on_startup)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    keep_alive() 
+    keep_alive()
     asyncio.run(main())
